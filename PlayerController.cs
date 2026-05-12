@@ -105,10 +105,12 @@ public class PlayerController : MonoBehaviour
     void Move()
     {
         float targetSpeed = isDrifting ? driftSpeed : normalSpeed;
+        Vector3 currentDir = rb.velocity.sqrMagnitude > 0.01f 
+            ? rb.velocity.normalized 
+            : transform.forward;
 
         // 목표 이동 방향 (플레이어가 보는 방향 기준)
         Vector3 desiredDirection = transform.forward * moveInput.y;
-
         Vector3 desiredVelocity;
 
         if (moveInput.y != 0)
@@ -129,7 +131,7 @@ public class PlayerController : MonoBehaviour
         if (isDrifting)
         {
             Vector3 driftDirection = Vector3.Lerp(
-                rb.velocity.normalized,
+                currentDir,
                 desiredDirection,
                 driftControl * Time.fixedDeltaTime
             );
@@ -141,7 +143,7 @@ public class PlayerController : MonoBehaviour
         {
             // 일반 상태에서는 방향 빠르게 맞춤
             Vector3 alignedDirection = Vector3.Lerp(
-                rb.velocity.normalized,
+                currentDir,
                 desiredDirection,
                 10f * Time.fixedDeltaTime
             );
@@ -282,7 +284,7 @@ public class PlayerController : MonoBehaviour
         // 👉 전진 속도 고정
         Vector3 forwardMove = transform.forward * flySpeed;
 
-        rb.linearVelocity = forwardMove;
+        rb.velocity = forwardMove;
     }
     void ExitFlyMode()
     {
@@ -319,7 +321,7 @@ public class PlayerController : MonoBehaviour
         currentState = PlayerState.Ragdoll;
 
         // 이동 멈춤
-        rb.linearVelocity = Vector3.zero;
+        rb.velocity = Vector3.zero;
 
         // 회전 제한 해제 (넘어질 수 있게)
         rb.constraints = RigidbodyConstraints.None;
