@@ -29,15 +29,19 @@ public class PlayerController : MonoBehaviour
     public float fuelBurnRate = 1f;
     public float fuelRegenRate = 1.5f;
 
-    // 부스터 파티클
+    // 파티클
     public ParticleSystem boosterEffect;
+    public GameObject explosionPrefab;
+
+    // 래그돌
     public float ragdollDuration = 2f;
     private float ragdollTimer;
 
     private PlayerInputActions inputActions;
     private Vector2 moveInput;
+    private float rollInput;
     private Vector3 velocity;
-    public float acceleration = 10f;
+    public float acceleration = 8f;
     public float deceleration = 8f;
     public float driftControl = 2f; // 드리프트 중 방향 보정 정도
 
@@ -45,35 +49,21 @@ public class PlayerController : MonoBehaviour
     {
         inputActions = new PlayerInputActions();
         rb = GetComponent<Rigidbody>();
-    }
-
-    void OnEnable()
-    {
-        inputActions.Enable();
-
-        inputActions.Player.Move.performed += OnMove;
-        inputActions.Player.Move.canceled += OnMove;
-
-        inputActions.Player.Interact.performed += OnInteract;
-    }
-
-    void OnDisable()
-    {
-        inputActions.Player.Move.performed -= OnMove;
-        inputActions.Player.Move.canceled -= OnMove;
-
-        inputActions.Player.Interact.performed -= OnInteract;
-
-        inputActions.Disable();
+        boosterEffect.Stop();
     }
     void Start()
     {
         currentFuel = maxFuel;
+
+        // 래그돌로 자세 정렬
+        EnterRagdoll();
+        RecoverFromRagdoll();
     }
     void Update()
     {
         HandleRagdollInput();
         HandleRagdollRecovery(); // 🔥 자동 복구
+
 
         if (currentState == PlayerState.Ragdoll)
             return;
@@ -91,122 +81,210 @@ public class PlayerController : MonoBehaviour
     }
     void FixedUpdate()
     {
+        
+        Debug.Log("IsGrounded : "+IsGrounded());
+        Debug.Log("IsUpright : "+IsUpright());
+        Debug.Log("currentState : "+currentState);
+        
+        
         if (currentState == PlayerState.Normal)
         {
-            Move();
-            Rotate();
+            if (IsGrounded()&&IsUpright())
+            {
+                Move();
+                Rotate();
+            }
+            else if (!IsGrounded())
+            {
+                Roll();
+            }
+
         }   
+    }
+ 
+    void OnEnable()
+    {
+        inputActions.Enable();
+
+        inputActions.Player.Move.performed += OnMove;
+        inputActions.Player.Move.canceled += OnMove;
+
+        inputActions.Player.Roll.performed += OnRoll;
+        inputActions.Player.Roll.canceled += OnRoll;
+
+        inputActions.Player.Interact.performed += OnInteract;
+    }
+    void OnDisable()
+    {
+        inputActions.Player.Move.performed -= OnMove;
+        inputActions.Player.Move.canceled -= OnMove;
+
+        inputActions.Player.Roll.performed -= OnRoll;
+        inputActions.Player.Roll.canceled -= OnRoll;
+
+        inputActions.Player.Interact.performed -= OnInteract;
+
+        inputActions.Disable();
     }
     void OnMove(InputAction.CallbackContext context)
     {
         moveInput = context.ReadValue<Vector2>();
     }
-
+    void OnInteract(InputAction.CallbackContext context)
+    {
+        Debug.Log("상호작용!");
+        // 여기서 아이템 줍기 or 인벤토리 연결
+    }
+    void OnRoll(InputAction.CallbackContext context)
+    {
+        rollInput = context.ReadValue<float>();
+    }
+    void OnCollisionEnter()
+    {
+        float speed = rb.linearVelocity.magnitude;
+        Debug.Log("speed :"+speed);
+        if(speed > 50)
+        {
+            GameObject explosionEffect = Instantiate(explosionPrefab, transform.position, Quaternion.identity);
+            explosionEffect.GetComponent<ExplosionController>().PlayAll();
+        }
+    }
+/*
     void Move()
     {
         float targetSpeed = isDrifting ? driftSpeed : normalSpeed;
-        Vector3 currentDir = rb.velocity.sqrMagnitude > 0.01f 
-            ? rb.velocity.normalized 
+
+        // 1. 중력을 방해하지 않기 위해 XZ 평면(바닥) 기준의 현재 속도만 가져옵니다.
+        Vector3 currentVelocityXZ = new Vector3(rb.linearVelocity.x, 0f, rb.linearVelocity.z);
+        
+        // 현재 이동 방향 (속도가 너무 느리면 앞을 보고 있다고 가정)
+        Vector3 currentDir = currentVelocityXZ.sqrMagnitude > 0.01f 
+            ? currentVelocityXZ.normalized 
             : transform.forward;
 
-        // 목표 이동 방향 (플레이어가 보는 방향 기준)
+        // 플레이어 입력에 따른 목표 방향
         Vector3 desiredDirection = transform.forward * moveInput.y;
-        Vector3 desiredVelocity;
+        Vector3 desiredVelocityXZ = Vector3.zero;
 
+        // 입력이 들어오면 가속
         if (moveInput.y != 0)
         {
+            if (isDrifting)
+            {
+                desiredDirection = Vector3.MoveTowards(
+                    currentDir,
+                    desiredDirection,
+                    driftControl * Time.fixedDeltaTime
+                );
+            }
             // 가속
-            desiredVelocity = desiredDirection * targetSpeed;
-        }
-        else
-        {
-            // 감속 (자연스럽게 멈춤)
-            desiredVelocity = Vector3.zero;
-        }
-
-        // 현재 속도와 목표 속도 차이 계산
-        Vector3 velocityDiff = desiredVelocity - rb.velocity;
-
-        // 드리프트 중 방향 보정
-        if (isDrifting)
-        {
-            Vector3 driftDirection = Vector3.Lerp(
-                currentDir,
-                desiredDirection,
-                driftControl * Time.fixedDeltaTime
-            );
-
-            desiredVelocity = driftDirection.normalized * rb.velocity.magnitude;
-            velocityDiff = desiredVelocity - rb.velocity;
-        }
-        else
-        {
-            // 일반 상태에서는 방향 빠르게 맞춤
-            Vector3 alignedDirection = Vector3.Lerp(
-                currentDir,
-                desiredDirection,
-                10f * Time.fixedDeltaTime
-            );
-
-            desiredVelocity = alignedDirection.normalized * rb.velocity.magnitude;
-            velocityDiff = desiredVelocity - rb.velocity;
-        }
-
-        // AddForce로 물리 기반 이동
-        rb.AddForce(velocityDiff * acceleration, ForceMode.Acceleration);
-    }
-    /*{
-        float targetSpeed = isDrifting ? driftSpeed : normalSpeed;
-
-        // 목표 이동 방향 (플레이어가 보는 방향 기준)
-        Vector3 desiredDirection = transform.forward * moveInput.y;
-
-        if (moveInput.y != 0)
-        {
-            // 가속
-            velocity = Vector3.Lerp(
+            desiredVelocityXZ = Vector3.MoveTowards(
                 velocity,
                 desiredDirection * targetSpeed,
                 acceleration * Time.deltaTime
             );
+
+            // 드리프트 중 방향 보정 약하게
+            if (isDrifting)
+            {
+                Vector3 driftDirection = Vector3.MoveTowards(
+                    velocity.normalized,
+                    desiredDirection,
+                    driftControl * Time.deltaTime
+                );
+
+                velocity = driftDirection.normalized * velocity.magnitude;
+            }
+            else
+            {
+                // 일반 상태에서는 방향 빠르게 맞춤
+                velocity = Vector3.MoveTowards(
+                    velocity,
+                    desiredDirection * velocity.magnitude,
+                    10f * Time.deltaTime
+                );
+            }
         }
+        // 입력이 없으면 감속
         else
         {
             // 감속 (자연스럽게 멈춤)
-            velocity = Vector3.Lerp(
+            velocity = Vector3.MoveTowards(
                 velocity,
                 Vector3.zero,
                 deceleration * Time.deltaTime
             );
         }
 
-        // 🔥 드리프트 중 방향 보정 약하게
-        if (isDrifting)
+        transform.position += velocity * Time.deltaTime;
+    }
+    */
+    void Move()
+    {
+        float targetSpeed = isDrifting ? driftSpeed : normalSpeed;
+
+        // 1. 중력을 방해하지 않기 위해 XZ 평면(바닥) 기준의 현재 속도만 가져옵니다.
+        Vector3 currentVelocityXZ = new Vector3(rb.linearVelocity.x, 0f, rb.linearVelocity.z);
+        
+        // 현재 이동 방향 
+        Vector3 currentDir = currentVelocityXZ.sqrMagnitude > 0.01f 
+            ? currentVelocityXZ.normalized 
+            : Vector3.zero;
+
+        // 플레이어 입력에 따른 목표 방향
+        Vector3 desiredDirection = transform.forward * moveInput.y;
+        Vector3 desiredVelocityXZ = Vector3.zero;
+
+        if (moveInput.y != 0)
         {
-            Vector3 driftDirection = Vector3.Lerp(
-                velocity.normalized,
-                desiredDirection,
-                driftControl * Time.deltaTime
+            // 2. 상태에 따른 회전 속도 결정
+            float turnSpeed = isDrifting ? 10f + driftControl : 10f;
+
+            // 3. 현재 이동 방향에서 목표 방향으로 자연스럽게 회전 (보정)
+            Vector3 alignedDirection = Vector3.MoveTowards(
+                currentDir, 
+                desiredDirection, 
+                turnSpeed * Time.fixedDeltaTime
             );
 
-            velocity = driftDirection.normalized * velocity.magnitude;
+            // 핵심 수정: 현재 속도(magnitude)가 아니라, '목표 속도(targetSpeed)'를 곱해줍니다!
+            desiredVelocityXZ = alignedDirection.normalized * targetSpeed;
+
+            // 4. 속도 차이(오차) 계산 (Y축 제외)
+            Vector3 velocityDiff = desiredVelocityXZ - currentVelocityXZ;
+
+            // 5. AddForce로 차이만큼 힘을 가해 목표 속도에 도달하게 함
+            // ForceMode.Acceleration은 질량을 무시하므로 가속도(acceleration) 값을 직관적으로 쓰기 좋습니다.
+            rb.AddForce(velocityDiff * acceleration, ForceMode.Acceleration);
         }
         else
         {
-            // 일반 상태에서는 방향 빠르게 맞춤
-            velocity = Vector3.Lerp(
-                velocity,
-                desiredDirection * velocity.magnitude,
-                10f * Time.deltaTime
-            );
+            // 입력이 없으면 목표 속도는 0 (감속)
+            desiredVelocityXZ = Vector3.zero;
+
+            // 4. 속도 차이(오차) 계산 (Y축 제외)
+            Vector3 velocityDiff = desiredVelocityXZ - currentVelocityXZ;
+
+            rb.AddForce(velocityDiff * deceleration, ForceMode.Acceleration);
         }
 
-        transform.position += velocity * Time.deltaTime;
-    }*/
+        
+        
+    }
     void Rotate()
     {
         float rotSpeed = isDrifting ? driftRotationSpeed : normalRotationSpeed;
         transform.Rotate(Vector3.up * moveInput.x * rotSpeed * Time.deltaTime);
+    }
+    void Roll()
+    {
+        float rotSpeed = flyTurnSpeed;
+                // 🎮 WASD → 방향 조작 (에임 느낌)
+        float yaw = moveInput.x * flyTurnSpeed * Time.deltaTime;
+        float pitch = -moveInput.y * flyTurnSpeed * Time.deltaTime;
+        float roll = rollInput * flyTurnSpeed * Time.deltaTime;
+    
+        transform.Rotate(pitch, yaw, roll);
     }
 
     public bool IsDrifting()
@@ -275,16 +353,13 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
-        // 🎮 WASD → 방향 조작 (에임 느낌)
-        float yaw = moveInput.x * flyTurnSpeed * Time.deltaTime;
-        float pitch = -moveInput.y * flyTurnSpeed * Time.deltaTime;
-
-        transform.Rotate(pitch, yaw, 0);
+        // pitch, yaw, roll로 조종
+        Roll();
 
         // 👉 전진 속도 고정
         Vector3 forwardMove = transform.forward * flySpeed;
 
-        rb.velocity = forwardMove;
+        rb.linearVelocity = forwardMove;
     }
     void ExitFlyMode()
     {
@@ -297,14 +372,17 @@ public class PlayerController : MonoBehaviour
 
     bool IsGrounded()
     {
-        return Physics.SphereCast(
-            transform.position,
+        return Physics.CheckSphere(
+            transform.position + Vector3.down * 0.5f, // 발 위치
             0.3f,
-            Vector3.down,
-            out RaycastHit hit,
-            1.2f
+            LayerMask.GetMask("Ground")
         );
     }
+    bool IsUpright()
+    {
+        return Vector3.Angle(transform.up, Vector3.up) < 45f;
+    }
+
     public float GetFuelPercent()
 {
     return currentFuel / maxFuel;
@@ -321,7 +399,7 @@ public class PlayerController : MonoBehaviour
         currentState = PlayerState.Ragdoll;
 
         // 이동 멈춤
-        rb.velocity = Vector3.zero;
+        rb.linearVelocity = Vector3.zero;
 
         // 회전 제한 해제 (넘어질 수 있게)
         rb.constraints = RigidbodyConstraints.None;
@@ -343,9 +421,4 @@ public class PlayerController : MonoBehaviour
         Debug.Log("current state :" + currentState);
     }
 
-    void OnInteract(InputAction.CallbackContext context)
-    {
-        Debug.Log("상호작용!");
-        // 여기서 아이템 줍기 or 인벤토리 연결
-    }
 }
